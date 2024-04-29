@@ -3,7 +3,9 @@
 This repository contains the Lithops S3 Client Adapter, which allows the cloudpathlib library to interface with Lithops storage abstraction for cloud object storage services like Minio.
 
 
-[!WARNING]This code is experimental. It is possible that to contain bugs or inconsistencies with the expected behavior of both the Lithops framework and cloudpathlib.
+
+> [!WARNING]  
+> This code is experimental. It is possible that to contain bugs or inconsistencies with the expected behavior of both the Lithops framework and cloudpathlib.
 
 ## Getting Started
 
