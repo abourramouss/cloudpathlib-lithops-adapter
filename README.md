@@ -5,7 +5,7 @@ This repository contains the Lithops S3 Client Adapter, which allows the cloudpa
 
 
 > [!WARNING]  
-> This code is experimental. It is possible that to contain bugs or inconsistencies with the expected behavior of both the Lithops framework and cloudpathlib.
+> This code is experimental. It is possible that it contains bugs or inconsistencies with the expected behavior of both the Lithops framework and cloudpathlib.
 
 ## Getting Started
 
