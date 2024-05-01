@@ -1,0 +1,1 @@
+from .cloudpathadapter import LithopsS3ClientAdapter

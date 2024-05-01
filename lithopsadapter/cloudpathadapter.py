@@ -25,18 +25,22 @@ class LithopsS3ClientAdapter(S3Client):
         self.file_cache_mode = file_cache_mode
         self.local_cache_dir = Path(local_cache_dir or "/tmp")
         self._local_cache_dir = self.local_cache_dir
+        logging.basicConfig(level=logging.INFO)
         self.client = lithops_client
 
     def _get_metadata(self, cloud_path: S3Path) -> Dict[str, Any]:
-        data = self.client.head_object(Bucket=cloud_path.bucket, Key=cloud_path.key)
-        print(data)
-        return {
-            "last_modified": data["LastModified"],
-            "size": data["ContentLength"],
-            "etag": data["ETag"].strip('"'),
-            "content_type": data.get("ContentType", None),  # Could be null?
-            "extra": data["Metadata"],
-        }
+        try:
+            data = self.client.head_object(Bucket=cloud_path.bucket, Key=cloud_path.key)
+            return {
+                "last_modified": data.get("LastModified"),
+                "size": data.get("ContentLength"),
+                "etag": data.get("ETag", "").strip('"'),
+                "content_type": data.get("ContentType"),
+                "extra": data.get("Metadata", {}),
+            }
+        except ClientError as e:
+            logging.error(f"Failed to get metadata for {cloud_path.key}: {e}")
+            return {}
 
     def _download_file(
         self,
@@ -62,8 +66,24 @@ class LithopsS3ClientAdapter(S3Client):
             )
             return None
 
-    def _is_file_or_dir(self, cloud_path: S3Path) -> str | None:
-        return super()._is_file_or_dir(cloud_path)
+    def _is_file_or_dir(self, cloud_path: S3Path) -> str:
+        if cloud_path.key.endswith("/"):
+            return "dir"
+        else:
+            try:
+                resp = self.client.head_object(
+                    Bucket=cloud_path.bucket, Key=cloud_path.key
+                )
+                if (
+                    "ContentType" in resp
+                    and resp["ContentType"] == "application/x-directory"
+                ):
+                    return "dir"
+                else:
+                    return "file"
+            except ClientError as e:
+                logging.error(f"Failed to retrieve object metadata: {e}")
+                return "unknown"
 
     def _exists(self, cloud_path: S3Path) -> bool:
         if not cloud_path.key:
@@ -140,30 +160,41 @@ class LithopsS3ClientAdapter(S3Client):
         return dst
 
     def _remove(self, cloud_path: S3Path, mission_ok: bool = True) -> None:
+        logging.info(f"Starting removal of {cloud_path}")
         file_or_dir = self._is_file_or_dir(cloud_path=cloud_path)
-        if file_or_dir == "file":
-            resp = self.client.delete_object(
-                Bucket=cloud_path.bucket, Key=cloud_path.key
-            )
-            if resp.get("ResponseMetadata").get("HTTPStatusCode") not in (204, 200):
+        logging.info(f"Determined '{cloud_path}' as a '{file_or_dir}'")
+
+        try:
+            if file_or_dir == "file":
+                resp = self.client.delete_object(
+                    Bucket=cloud_path.bucket, Key=cloud_path.key
+                )
+                logging.info(f"Delete object response: {resp}")
+            elif file_or_dir == "dir":
+                objects_to_delete = [
+                    {"Key": obj.key}
+                    for obj, _ in self._list_dir(cloud_path, recursive=True)
+                ]
+                logging.info(f"Objects to delete: {objects_to_delete}")
+                if objects_to_delete:
+                    resp = self.client.delete_objects(
+                        Bucket=cloud_path.bucket, Delete={"Objects": objects_to_delete}
+                    )
+                    logging.info(f"Delete objects response: {resp}")
+                else:
+                    logging.info("No objects found to delete; exiting")
+                    return
+            else:
+                if not mission_ok:
+                    raise CloudPathException(f"Path {cloud_path} does not exist")
+
+            if resp.get("ResponseMetadata", {}).get("HTTPStatusCode") not in (204, 200):
                 raise CloudPathException(
                     f"Delete operation failed for {cloud_path} with response: {resp}"
                 )
-        elif file_or_dir == "dir":
-            bucket = cloud_path.bucket
-            if prefix and not prefix.endswith("/"):
-                prefix += "/"
-            resp = self.client.delete_objects(
-                Bucket=bucket,
-                Delete={"Objects": [{"Key": cloud_path.key}], "Quiet": True},
-            )
-            if resp.get("ResponseMetadata").get("HTTPStatusCode") not in (204, 200):
-                raise CloudPathException(
-                    f"Cannot delete file that does not exist: {cloud_path} (consider passing missing_ok=True)"
-                )
-        else:
-            if not mission_ok:
-                raise CloudPathException(f"Path {cloud_path} does not exist")
+        except Exception as e:
+            logging.error(f"Exception during removal: {e}")
+            raise
 
     def _upload_file(
         self, local_path: Union[str, os.PathLike], cloud_path: S3Path
@@ -214,20 +245,3 @@ class LithopsS3ClientAdapter(S3Client):
             ExpiresIn=expire_seconds,
         )
         return url
-
-
-if __name__ == "__main__":
-    from lithops import Storage
-
-    storage = Storage()
-    minio_client = storage.get_client()
-
-    adapter_client = LithopsS3ClientAdapter(minio_client)
-
-    cloud_path = CloudPath(
-        "s3://ayman-extract/extract-data",
-        client=adapter_client,
-    )
-
-    for f in cloud_path.iterdir():
-        print(f)
